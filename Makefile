@@ -415,10 +415,10 @@ deb: bin/calico-felix
 ifeq ($(GIT_COMMIT),<unknown>)
 	$(error Package builds must be done from a git working copy in order to calculate version numbers.)
 endif
-	$(MAKE) calico-build/trusty
-	$(MAKE) calico-build/xenial
+	#$(MAKE) calico-build/trusty
+	#$(MAKE) calico-build/xenial
 	$(MAKE) calico-build/stretch
-	$(MAKE) calico-build/bionic
+	#$(MAKE) calico-build/bionic
 	utils/make-packages.sh deb
 
 # Build RPMs.

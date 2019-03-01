@@ -66,7 +66,7 @@ EOF
 EOF
 	    } > debian/changelog
 
-	    for series in trusty xenial stretch bionic; do
+	    for series in stretch; do
 		${DOCKER_RUN_RM} -e DEB_VERSION=${debver}~${series} \
 				 calico-build/${series} debian/build-debs
 	    done

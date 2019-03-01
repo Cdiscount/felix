@@ -673,7 +673,6 @@ stop-grafana:
 	@-docker rm -f k8sfv-grafana
 	sleep 2
 
-<<<<<<< HEAD
 # Pre-configured docker run command that runs as this user with the repo
 # checked out to /code, uses the --rm flag to avoid leaving the container
 # around afterwards.

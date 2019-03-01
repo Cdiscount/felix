@@ -20,9 +20,9 @@
 # +----------------------+                                           :
 # | calico-build/centos7 |                                           v
 # | calico-build/xenial  |                                 +------------------+
-# | calico-build/trusty  |                                 | bin/calico-felix |
-# | calico-build/stretch |                                 +------------------+
-# +----------------------+                                        /   /
+# | calico-build/trusty  |
+# | calico-build/stretch |
+# +----------------------+                                 +------------------+
 #                     \                                          /   /
 #                      \             .--------------------------'   /
 #                       \           /                              /
@@ -33,13 +33,13 @@
 #                           |                         /
 #                           |                   docker build
 #                           v                         |
-#            +-----------------------------+          |
-#            |  RPM packages for Centos7   |          |
-#            |  RPM packages for Centos6   |          v
-#            | Debian packages for Xenial  |    +--------------+
-#            | Debian packages for Trusty  |    | calico/felix |
-#            | Debian packages for Stretch |    +--------------+
-#            +-----------------------------+
+#            +----------------------------+           |
+#            |  RPM packages for Centos7  |           |
+#            |  RPM packages for Centos6  |           v
+#            | Debian packages for Xenial |    +--------------+
+#            | Debian packages for Trusty |    | calico/felix |
+#            | Debian packages for Stretch|    +--------------+
+#	     +----------------------------+    
 #
 #
 #
@@ -417,6 +417,7 @@ ifeq ($(GIT_COMMIT),<unknown>)
 endif
 	$(MAKE) calico-build/trusty
 	$(MAKE) calico-build/xenial
+	$(MAKE) calico-build/stretch
 	$(MAKE) calico-build/bionic
 	utils/make-packages.sh deb
 
@@ -673,115 +674,7 @@ stop-grafana:
 	@-docker rm -f k8sfv-grafana
 	sleep 2
 
-# Pre-configured docker run command that runs as this user with the repo
-# checked out to /code, uses the --rm flag to avoid leaving the container
-# around afterwards.
-DOCKER_RUN_RM:=docker run --rm --user $(MY_UID):$(MY_GID) -v $${PWD}:/code
-DOCKER_RUN_RM_ROOT:=docker run --rm -v $${PWD}:/code
-
-# Allow libcalico-go and the ssh auth sock to be mapped into the build container.
-ifdef LIBCALICOGO_PATH
-  EXTRA_DOCKER_ARGS += -v $(LIBCALICOGO_PATH):/go/src/github.com/projectcalico/libcalico-go:ro
-endif
-ifdef SSH_AUTH_SOCK
-  EXTRA_DOCKER_ARGS += -v $(SSH_AUTH_SOCK):/ssh-agent --env SSH_AUTH_SOCK=/ssh-agent
-endif
-DOCKER_GO_BUILD := mkdir -p .go-pkg-cache && \
-                   docker run --rm \
-                              --net=host \
-                              $(EXTRA_DOCKER_ARGS) \
-                              -e LOCAL_USER_ID=$(MY_UID) \
-                              -v $${PWD}:/go/src/github.com/projectcalico/felix:rw \
-                              -v $${PWD}/.go-pkg-cache:/go/pkg:rw \
-                              -w /go/src/github.com/projectcalico/felix \
-                              -e GOARCH=$(ARCH) \
-                              $(GO_BUILD_CONTAINER)
-
-# Build all the debs.
-.PHONY: deb
-deb: bin/calico-felix
-ifeq ($(GIT_COMMIT),<unknown>)
-	$(error Package builds must be done from a git working copy in order to calculate version numbers.)
-endif
-	$(MAKE) calico-build/trusty
-	$(MAKE) calico-build/xenial
-	$(MAKE) calico-build/stretch
-	utils/make-packages.sh deb
-
-# Build RPMs.
-.PHONY: rpm
-rpm: bin/calico-felix
-ifeq ($(GIT_COMMIT),<unknown>)
-	$(error Package builds must be done from a git working copy in order to calculate version numbers.)
-endif
-	$(MAKE) calico-build/centos7
-ifneq ("$(ARCH)","ppc64le") # no ppc64le support in centos6
-	$(MAKE) calico-build/centos6
-endif
-	utils/make-packages.sh rpm
-
-.PHONY: protobuf
-protobuf: proto/felixbackend.pb.go
-
-# Generate the protobuf bindings for go.
-proto/felixbackend.pb.go: proto/felixbackend.proto
-	$(DOCKER_RUN_RM) -v $${PWD}/proto:/src:rw \
-	              $(PROTOC_CONTAINER) \
-	              --gogofaster_out=plugins=grpc:. \
-	              felixbackend.proto
-
-# Update the vendored dependencies with the latest upstream versions matching
-# our glide.yaml.  If there area any changes, this updates glide.lock
-# as a side effect.  Unless you're adding/updating a dependency, you probably
-# want to use the vendor target to install the versions from glide.lock.
-VENDOR_REMADE := false
-.PHONY: update-vendor
-update-vendor glide.lock:
-	mkdir -p $$HOME/.glide
-	$(DOCKER_GO_BUILD) glide up --strip-vendor
-	touch vendor/.up-to-date
-	# Optimization: since glide up does the job of glide install, flag to the
-	# vendor target that it doesn't need to do anything.
-	$(eval VENDOR_REMADE := true)
-
-# vendor is a shortcut for force rebuilding the go vendor directory.
-.PHONY: vendor
-vendor vendor/.up-to-date: glide.lock
-	if ! $(VENDOR_REMADE); then \
-	  mkdir -p $$HOME/.glide && \
-	  $(DOCKER_GO_BUILD) glide install --strip-vendor && \
-	  touch vendor/.up-to-date; \
-	fi
-
-# Linker flags for building Felix.
-#
-# We use -X to insert the version information into the placeholder variables
-# in the buildinfo package.
-#
-# We use -B to insert a build ID note into the executable, without which, the
-# RPM build tools complain.
-LDFLAGS:=-ldflags "\
-        -X github.com/projectcalico/felix/buildinfo.GitVersion=$(GIT_DESCRIPTION) \
-        -X github.com/projectcalico/felix/buildinfo.BuildDate=$(DATE) \
-        -X github.com/projectcalico/felix/buildinfo.GitRevision=$(GIT_COMMIT) \
-        -B 0x$(BUILD_ID)"
-
-bin/calico-felix: bin/calico-felix-$(ARCH)
-	ln -f bin/calico-felix-$(ARCH) bin/calico-felix
-
-bin/calico-felix-$(ARCH): $(FELIX_GO_FILES) vendor/.up-to-date
-	@echo Building felix for $(ARCH) on $(BUILDARCH)
-	mkdir -p bin
-	$(DOCKER_GO_BUILD) \
-	   sh -c 'go build -v -i -o $@ -v $(LDFLAGS) "github.com/projectcalico/felix" && \
-		( ldd $@ 2>&1 | grep -q -e "Not a valid dynamic program" \
-		-e "not a dynamic executable" || \
-		( echo "Error: $@ was not statically linked"; false ) )'
-
-bin/iptables-locker: $(FELIX_GO_FILES) vendor/.up-to-date
-=======
 bin/iptables-locker: $(SRC_FILES) vendor/.up-to-date
->>>>>>> c0de0d1ca734dd16b7630a72b86c163d5920f20c
 	@echo Building iptables-locker...
 	mkdir -p bin
 	$(DOCKER_RUN) $(LOCAL_BUILD_MOUNTS) $(CALICO_BUILD) \

@@ -1,4 +1,4 @@
-// Copyright (c) 2017-2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2017-2019 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package daemon
 
 import (
 	"context"
@@ -28,7 +28,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/docopt/docopt-go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
@@ -36,7 +35,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
-	"github.com/projectcalico/felix/binder"
 	"github.com/projectcalico/felix/buildinfo"
 	"github.com/projectcalico/felix/calc"
 	"github.com/projectcalico/felix/config"
@@ -58,6 +56,7 @@ import (
 	"github.com/projectcalico/libcalico-go/lib/health"
 	lclogutils "github.com/projectcalico/libcalico-go/lib/logutils"
 	"github.com/projectcalico/libcalico-go/lib/set"
+	"github.com/projectcalico/pod2daemon/binder"
 	"github.com/projectcalico/typha/pkg/syncclient"
 )
 
@@ -86,7 +85,7 @@ const (
 	configChangedRC = 129
 )
 
-// main is the entry point to the calico-felix binary.
+// Run is the entry point to run a Felix instance.
 //
 // Its main role is to sequence Felix's startup by:
 //
@@ -112,7 +111,7 @@ const (
 // To avoid having to maintain rarely-used code paths, Felix handles updates to its
 // main config parameters by exiting and allowing itself to be restarted by the init
 // daemon.
-func main() {
+func Run(configFile string) {
 	// Go's RNG is not seeded by default.  Do that now.
 	rand.Seed(time.Now().UTC().UnixNano())
 
@@ -130,15 +129,6 @@ func main() {
 		debug.SetGCPercent(defaultGCPercent)
 	}
 
-	// Parse command-line args.
-	version := "Version:            " + buildinfo.GitVersion + "\n" +
-		"Full git commit ID: " + buildinfo.GitRevision + "\n" +
-		"Build date:         " + buildinfo.BuildDate + "\n"
-	arguments, err := docopt.Parse(usage, nil, true, version, false)
-	if err != nil {
-		println(usage)
-		log.Fatalf("Failed to parse usage, exiting: %v", err)
-	}
 	buildInfoLogCxt := log.WithFields(log.Fields{
 		"version":    buildinfo.GitVersion,
 		"buildDate":  buildinfo.BuildDate,
@@ -146,7 +136,6 @@ func main() {
 		"GOMAXPROCS": runtime.GOMAXPROCS(0),
 	})
 	buildInfoLogCxt.Info("Felix starting up")
-	log.Infof("Command line arguments: %v", arguments)
 
 	// Health monitoring, for liveness and readiness endpoints.  The following loop can take a
 	// while before the datastore reports itself as ready - for example when there is data that
@@ -186,7 +175,7 @@ configRetry:
 		configParams = config.New()
 		envConfig := config.LoadConfigFromEnvironment(os.Environ())
 		// Then, the config file.
-		configFile := arguments["--config-file"].(string)
+		log.Infof("Loading config file: %v", configFile)
 		fileConfig, err := config.LoadConfigFile(configFile)
 		if err != nil {
 			log.WithError(err).WithField("configFile", configFile).Error(
@@ -470,6 +459,7 @@ configRetry:
 			"Endpoint status reporting enabled, starting status reporter")
 		dpConnector.statusReporter = statusrep.NewEndpointStatusReporter(
 			configParams.FelixHostname,
+			configParams.OpenstackRegion,
 			dpConnector.StatusUpdatesFromDataplane,
 			dpConnector.InSync,
 			dpConnector.datastore,
@@ -529,7 +519,7 @@ func servePrometheusMetrics(configParams *config.Config) {
 			}
 			if !configParams.PrometheusProcessMetricsEnabled {
 				log.Info("Discarding process metrics")
-				prometheus.Unregister(prometheus.NewProcessCollector(os.Getpid(), ""))
+				prometheus.Unregister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 			}
 		}
 		http.Handle("/metrics", promhttp.Handler())
@@ -651,7 +641,7 @@ func exitWithCustomRC(rc int, message string) {
 	// Since log writing is done a background thread, we set the force-flush flag on this log to ensure that
 	// all the in-flight logs get written before we exit.
 	log.WithFields(log.Fields{
-		"rc": rc,
+		"rc":                       rc,
 		lclogutils.FieldForceFlush: true,
 	}).Info(message)
 	os.Exit(rc)
@@ -810,9 +800,9 @@ func newConnector(configParams *config.Config,
 		datastore:                  datastore,
 		ToDataplane:                make(chan interface{}),
 		StatusUpdatesFromDataplane: make(chan interface{}),
-		InSync:            make(chan bool, 1),
-		failureReportChan: failureReportChan,
-		dataplane:         dataplane,
+		InSync:                     make(chan bool, 1),
+		failureReportChan:          failureReportChan,
+		dataplane:                  dataplane,
 	}
 	return felixConn
 }
@@ -864,7 +854,7 @@ func (fc *DataplaneConnector) handleProcessStatusUpdate(ctx context.Context, msg
 		FirstUpdate:   !fc.firstStatusReportSent,
 	}
 	kv := model.KVPair{
-		Key:   model.ActiveStatusReportKey{Hostname: fc.config.FelixHostname},
+		Key:   model.ActiveStatusReportKey{Hostname: fc.config.FelixHostname, RegionString: model.RegionString(fc.config.OpenstackRegion)},
 		Value: &statusReport,
 		TTL:   fc.config.ReportingTTLSecs,
 	}
@@ -877,7 +867,7 @@ func (fc *DataplaneConnector) handleProcessStatusUpdate(ctx context.Context, msg
 		fc.firstStatusReportSent = true
 	}
 	kv = model.KVPair{
-		Key:   model.LastStatusReportKey{Hostname: fc.config.FelixHostname},
+		Key:   model.LastStatusReportKey{Hostname: fc.config.FelixHostname, RegionString: model.RegionString(fc.config.OpenstackRegion)},
 		Value: &statusReport,
 	}
 	applyCtx, cancel = context.WithTimeout(ctx, 2*time.Second)

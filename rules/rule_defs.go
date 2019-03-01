@@ -57,7 +57,7 @@ const (
 	IPSetIDNATOutgoingAllPools  = "all-ipam-pools"
 	IPSetIDNATOutgoingMasqPools = "masq-ipam-pools"
 
-	IPSetIDAllHostIPs  = "all-hosts"
+	IPSetIDAllHostNets = "all-hosts-net"
 	IPSetIDThisHostIPs = "this-host"
 
 	ChainFIPDnat = ChainNamePrefix + "fip-dnat"
@@ -162,7 +162,7 @@ type RuleRenderer interface {
 	) []*iptables.Chain
 
 	HostDispatchChains(map[string]proto.HostEndpointID, bool) []*iptables.Chain
-	FromHostDispatchChains(map[string]proto.HostEndpointID) []*iptables.Chain
+	FromHostDispatchChains(map[string]proto.HostEndpointID, string) []*iptables.Chain
 	HostEndpointToFilterChains(
 		ifaceName string,
 		epMarkMapper EndpointMarkMapper,
@@ -186,6 +186,7 @@ type RuleRenderer interface {
 	ProfileToIptablesChains(profileID *proto.ProfileID, policy *proto.Profile, ipVersion uint8) []*iptables.Chain
 	ProtoRuleToIptablesRules(pRule *proto.Rule, ipVersion uint8) []iptables.Rule
 
+	MakeNatOutgoingRule(protocol string, action iptables.Action, ipVersion uint8) iptables.Rule
 	NATOutgoingChain(active bool, ipVersion uint8) *iptables.Chain
 
 	DNATsToIptablesChains(dnats map[string]string) []*iptables.Chain
@@ -246,6 +247,9 @@ type Config struct {
 	FailsafeOutboundHostPorts []config.ProtoPort
 
 	DisableConntrackInvalid bool
+
+	NATPortRange                       numorstring.Port
+	IptablesNATOutgoingInterfaceFilter string
 }
 
 func (c *Config) validate() {

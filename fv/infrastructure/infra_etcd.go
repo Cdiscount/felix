@@ -34,8 +34,10 @@ type EtcdDatastoreInfra struct {
 	BadEndpoint string
 }
 
-func createEtcdDatastoreInfra() (DatastoreInfra, error) {
-	return GetEtcdDatastoreInfra()
+func createEtcdDatastoreInfra() DatastoreInfra {
+	infra, err := GetEtcdDatastoreInfra()
+	Expect(err).NotTo(HaveOccurred())
+	return infra
 }
 
 func GetEtcdDatastoreInfra() (*EtcdDatastoreInfra, error) {
@@ -77,16 +79,20 @@ func (eds *EtcdDatastoreInfra) GetCalicoClient() client.Interface {
 	return utils.GetEtcdClient(eds.etcdContainer.IP)
 }
 
+func (eds *EtcdDatastoreInfra) SetExpectedIPIPTunnelAddr(felix *Felix, idx int, needBGP bool) {
+	if needBGP {
+		felix.ExpectedIPIPTunnelAddr = fmt.Sprintf("10.65.%d.1", idx)
+	}
+}
+
 func (eds *EtcdDatastoreInfra) AddNode(felix *Felix, idx int, needBGP bool) {
 	felixNode := api.NewNode()
 	felixNode.Name = felix.Hostname
 	if needBGP {
-		tunnelAddr := fmt.Sprintf("10.65.%d.1", idx)
 		felixNode.Spec.BGP = &api.NodeBGPSpec{
 			IPv4Address:        felix.IP,
-			IPv4IPIPTunnelAddr: tunnelAddr,
+			IPv4IPIPTunnelAddr: felix.ExpectedIPIPTunnelAddr,
 		}
-		felix.ExpectedIPIPTunnelAddr = tunnelAddr
 	}
 	Eventually(func() error {
 		_, err := eds.GetCalicoClient().Nodes().Create(utils.Ctx, felixNode, utils.NoOptions)
@@ -117,14 +123,15 @@ func (eds *EtcdDatastoreInfra) AddAllowToDatastore(selector string) error {
 	return err
 }
 
-func (eds *EtcdDatastoreInfra) AddDefaultAllow() error {
+func (eds *EtcdDatastoreInfra) AddDefaultAllow() {
 	defaultProfile := api.NewProfile()
 	defaultProfile.Name = "default"
 	defaultProfile.Spec.LabelsToApply = map[string]string{"default": ""}
 	defaultProfile.Spec.Egress = []api.Rule{{Action: api.Allow}}
 	defaultProfile.Spec.Ingress = []api.Rule{{Action: api.Allow}}
 	_, err := eds.GetCalicoClient().Profiles().Create(utils.Ctx, defaultProfile, utils.NoOptions)
-	return err
+	Expect(err).NotTo(HaveOccurred())
+	return
 }
 
 func (eds *EtcdDatastoreInfra) AddDefaultDeny() error {

@@ -40,6 +40,10 @@ function git_commit_id {
     git rev-parse HEAD | cut -c-7
 }
 
+function strip_v {
+	echo $1 | sed 's/^v//'
+}
+
 # Convert PEP 440 version to Debian.
 function git_version_to_deb {
     echo $1 | sed 's/\([0-9]\)-\?\(a\|b\|rc\|pre\)/\1~\2/'
@@ -47,7 +51,7 @@ function git_version_to_deb {
 
 # Convert PEP 440 version to RPM.
 function git_version_to_rpm {
-    echo $1 | sed 's/\([0-9]\)-\?\(a\|b\|rc\|pre\)/\1_\2/'
+    echo $1 | sed 's/\([0-9]\)-\?\(a\|b\|rc\|pre\|0.dev\)/\1_\2/'
 }
 
 # Check that version is valid.
@@ -55,7 +59,7 @@ function validate_version {
     version=$1
 
     # We allow.
-    REGEX="^[0-9]+\.[0-9]+\.[0-9]+(-?(a|b|rc|pre).*)?$"
+    REGEX="^v[0-9]+\.[0-9]+\.[0-9]+(-?(a|b|rc|pre).*)?$"
 
     if [[ $version =~ $REGEX ]]; then
 	return 0
@@ -75,62 +79,43 @@ function test_validate_version {
     }
 
     # Test cases.
-    expect_valid 1.2.3
+    expect_valid v1.2.3
     expect_invalid 1.2.3.4
     expect_invalid .2.3.4
     expect_invalid abc
     expect_invalid 1.2.3.beta
-    expect_valid 1.2.3-beta.2
-    expect_valid 1.2.3-beta
-    expect_valid 1.2.3-alpha
-    expect_valid 1.2.3-rc2
+    expect_valid v1.2.3-beta.2
+    expect_valid v1.2.3-beta
+    expect_valid v1.2.3-alpha
+    expect_valid v1.2.3-rc2
     expect_invalid 1:2.3-rc2
     expect_invalid 1.2:3-rc2
     expect_invalid 1.2.3:rc2
 
-    # All Felix tags since 1.0.0:
-    expect_valid 1.0.0
-    expect_valid 1.1.0
-    expect_valid 1.2.0
-    expect_valid 1.2.0-pre2
-    expect_valid 1.2.1
-    expect_valid 1.2.2
-    expect_valid 1.3.0
-    expect_valid 1.3.0-pre5
-    expect_valid 1.3.0a5
-    expect_valid 1.3.0a6
-    expect_valid 1.3.1
-    expect_valid 1.4.0
-    expect_valid 1.4.0b1
-    expect_valid 1.4.0b2
-    expect_valid 1.4.0b3
-    expect_valid 1.4.1b1
-    expect_valid 1.4.1b2
-    expect_valid 1.4.2
-    expect_valid 1.4.3
-    expect_valid 1.4.4
-    expect_valid 2.0.0-beta
-    expect_valid 2.0.0-beta-rc2
-    expect_valid 2.0.0-beta.2
-    expect_valid 2.0.0-beta.3
-    expect_invalid v2.0.0-beta-rc1
-}
-
-# Return the series of tags from HEAD back to (but excluding) the
-# specified tag, with the most recent tag first.
-function git_tags_back_to {
-
-    backstop_tag=$1
-    cursor=HEAD
-    num_tags=0
-    while [ $num_tags -lt 10 ]; do
-	previous_tag=`git describe --tags --abbrev=0 $cursor`
-	if [ $previous_tag = $backstop_tag ]; then
-	    # We've found the last packaged release, so stop.
-	    break
-	fi
-	echo ${previous_tag}
-	let 'num_tags += 1'
-	cursor="${previous_tag}^"
-    done
+    # All Felix tags since 1.0.0 (with v prefixed):
+    expect_valid v1.0.0
+    expect_valid v1.1.0
+    expect_valid v1.2.0
+    expect_valid v1.2.0-pre2
+    expect_valid v1.2.1
+    expect_valid v1.2.2
+    expect_valid v1.3.0
+    expect_valid v1.3.0-pre5
+    expect_valid v1.3.0a5
+    expect_valid v1.3.0a6
+    expect_valid v1.3.1
+    expect_valid v1.4.0
+    expect_valid v1.4.0b1
+    expect_valid v1.4.0b2
+    expect_valid v1.4.0b3
+    expect_valid v1.4.1b1
+    expect_valid v1.4.1b2
+    expect_valid v1.4.2
+    expect_valid v1.4.3
+    expect_valid v1.4.4
+    expect_valid v2.0.0-beta
+    expect_valid v2.0.0-beta-rc2
+    expect_valid v2.0.0-beta.2
+    expect_valid v2.0.0-beta.3
+    expect_valid v2.0.0-beta-rc1
 }

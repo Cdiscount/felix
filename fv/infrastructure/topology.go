@@ -25,20 +25,23 @@ import (
 	"regexp"
 
 	"github.com/projectcalico/felix/fv/containers"
-	"github.com/projectcalico/felix/fv/utils"
 	api "github.com/projectcalico/libcalico-go/lib/apis/v3"
 	client "github.com/projectcalico/libcalico-go/lib/clientv3"
+	"github.com/projectcalico/libcalico-go/lib/errors"
 	"github.com/projectcalico/libcalico-go/lib/options"
 )
 
 type TopologyOptions struct {
-	FelixLogSeverity  string
-	EnableIPv6        bool
-	ExtraEnvVars      map[string]string
-	ExtraVolumes      map[string]string
-	WithTypha         bool
-	WithFelixTyphaTLS bool
-	TyphaLogSeverity  string
+	FelixLogSeverity          string
+	EnableIPv6                bool
+	ExtraEnvVars              map[string]string
+	ExtraVolumes              map[string]string
+	WithTypha                 bool
+	WithFelixTyphaTLS         bool
+	TyphaLogSeverity          string
+	IPIPEnabled               bool
+	IPIPRoutesEnabled         bool
+	InitialFelixConfiguration *api.FelixConfiguration
 }
 
 func DefaultTopologyOptions() TopologyOptions {
@@ -50,6 +53,8 @@ func DefaultTopologyOptions() TopologyOptions {
 		WithTypha:         false,
 		WithFelixTyphaTLS: false,
 		TyphaLogSeverity:  "info",
+		IPIPEnabled:       true,
+		IPIPRoutesEnabled: true,
 	}
 }
 
@@ -74,12 +79,11 @@ func StartNNodeEtcdTopology(n int, opts TopologyOptions) (felixes []*Felix, etcd
 
 	eds, err := GetEtcdDatastoreInfra()
 	Expect(err).ToNot(HaveOccurred())
+	etcd = eds.etcdContainer
 
 	felixes, client = StartNNodeTopology(n, opts, eds)
 
-	client = utils.GetEtcdClient(eds.etcdContainer.IP)
-
-	return felixes, eds.etcdContainer, client
+	return
 }
 
 // StartSingleNodeEtcdTopology starts an etcd container and a single Felix container; it initialises
@@ -116,6 +120,24 @@ func StartNNodeTopology(n int, opts TopologyOptions, infra DatastoreInfra) (feli
 	client = infra.GetCalicoClient()
 	mustInitDatastore(client)
 
+	// If asked to, pre-create a felix configuration.  We do this before enabling IPIP because IPIP set-up can
+	// create/update a FelixConfiguration as a side-effect.
+	if opts.InitialFelixConfiguration != nil {
+		log.WithField("config", opts.InitialFelixConfiguration).Info(
+			"Installing initial FelixConfiguration")
+		Eventually(func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, err = client.FelixConfigurations().Create(ctx, opts.InitialFelixConfiguration, options.SetOptions{})
+			if _, ok := err.(errors.ErrorResourceAlreadyExists); ok {
+				// Try to delete the unexpected config, then, if there's still time in the Eventually loop,
+				// we'll try to recreate
+				_, _ = client.FelixConfigurations().Delete(ctx, "default", options.DeleteOptions{})
+			}
+			return err
+		}, "10s").ShouldNot(HaveOccurred())
+	}
+
 	if n > 1 {
 		Eventually(func() error {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -123,7 +145,11 @@ func StartNNodeTopology(n int, opts TopologyOptions, infra DatastoreInfra) (feli
 			ipPool := api.NewIPPool()
 			ipPool.Name = "test-pool"
 			ipPool.Spec.CIDR = "10.65.0.0/16"
-			ipPool.Spec.IPIPMode = api.IPIPModeAlways
+			if opts.IPIPEnabled {
+				ipPool.Spec.IPIPMode = api.IPIPModeAlways
+			} else {
+				ipPool.Spec.IPIPMode = api.IPIPModeNever
+			}
 			_, err = client.IPPools().Create(ctx, ipPool, options.SetOptions{})
 			return err
 		}).ShouldNot(HaveOccurred())
@@ -137,6 +163,9 @@ func StartNNodeTopology(n int, opts TopologyOptions, infra DatastoreInfra) (feli
 	for i := 0; i < n; i++ {
 		// Then start Felix and create a node for it.
 		felix := RunFelix(infra, opts)
+		if opts.IPIPEnabled {
+			infra.SetExpectedIPIPTunnelAddr(felix, i, bool(n > 1))
+		}
 
 		var w chan struct{}
 		if felix.ExpectedIPIPTunnelAddr != "" {
@@ -149,7 +178,9 @@ func StartNNodeTopology(n int, opts TopologyOptions, infra DatastoreInfra) (feli
 		infra.AddNode(felix, i, bool(n > 1))
 		if w != nil {
 			// Wait for any Felix restart...
-			Eventually(w, "10s").Should(BeClosed())
+			log.Info("Wait for Felix to restart")
+			Eventually(w, "10s").Should(BeClosed(),
+				"Timed out waiting for Felix to restart with IpInIpTunnelAddress")
 		}
 		felixes = append(felixes, felix)
 	}
@@ -163,8 +194,13 @@ func StartNNodeTopology(n int, opts TopologyOptions, infra DatastoreInfra) (feli
 			}
 
 			jBlock := fmt.Sprintf("10.65.%d.0/24", j)
-			err := iFelix.ExecMayFail("ip", "route", "add", jBlock, "via", jFelix.IP, "dev", "tunl0", "onlink")
-			Expect(err).ToNot(HaveOccurred())
+			if opts.IPIPEnabled && opts.IPIPRoutesEnabled {
+				err := iFelix.ExecMayFail("ip", "route", "add", jBlock, "via", jFelix.IP, "dev", "tunl0", "onlink")
+				Expect(err).ToNot(HaveOccurred())
+			} else {
+				err := iFelix.ExecMayFail("ip", "route", "add", jBlock, "via", jFelix.IP, "dev", "eth0")
+				Expect(err).ToNot(HaveOccurred())
+			}
 		}
 	}
 	success = true

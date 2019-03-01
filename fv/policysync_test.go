@@ -33,9 +33,9 @@ import (
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
 
-	"github.com/projectcalico/felix/binder"
 	"github.com/projectcalico/libcalico-go/lib/backend/k8s/conversion"
 	"github.com/projectcalico/libcalico-go/lib/options"
+	"github.com/projectcalico/pod2daemon/binder"
 
 	"github.com/projectcalico/felix/dataplane/mock"
 	"github.com/projectcalico/libcalico-go/lib/set"
@@ -350,6 +350,9 @@ var _ = Context("policy sync API tests", func() {
 											Selector: "foo == 'bar'",
 										},
 									},
+									HTTP: &api.HTTPMatch{Methods: []string{"GET"},
+										Paths: []api.HTTPPath{{Exact: "/path"}},
+									},
 								},
 							}
 							policy.Spec.Egress = []api.Rule{
@@ -405,6 +408,9 @@ var _ = Context("policy sync API tests", func() {
 											},
 											SrcServiceAccountMatch: &proto.ServiceAccountMatch{
 												Selector: "foo == 'bar'",
+											},
+											HttpMatch: &proto.HTTPMatch{Methods: []string{"GET"},
+												Paths: []*proto.HTTPMatch_PathMatch{{&proto.HTTPMatch_PathMatch_Exact{Exact: "/path"}}},
 											},
 										},
 									},

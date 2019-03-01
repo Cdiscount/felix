@@ -204,9 +204,6 @@ func (r *DefaultRuleRenderer) StaticFilterOutputForwardEndpointMarkChain() *Chai
 func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 	var inputRules []Rule
 
-	// Accept immediately if we've already accepted this packet in the raw or mangle table.
-	inputRules = append(inputRules, r.acceptAlreadyAccepted()...)
-
 	if ipVersion == 4 && r.IPIPEnabled {
 		// IPIP is enabled, filter incoming IPIP packets to ensure they come from a
 		// recognised host and are going to a local address on the host.  We use the protocol
@@ -214,7 +211,7 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 		inputRules = append(inputRules,
 			Rule{
 				Match: Match().ProtocolNum(ProtoIPIP).
-					SourceIPSet(r.IPSetConfigV4.NameForMainIPSet(IPSetIDAllHostIPs)).
+					SourceIPSet(r.IPSetConfigV4.NameForMainIPSet(IPSetIDAllHostNets)).
 					DestAddrType(AddrTypeLocal),
 				Action:  r.filterAllowAction,
 				Comment: "Allow IPIP packets from Calico hosts",
@@ -253,6 +250,11 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 			Action: GotoAction{Target: ChainWorkloadToHost},
 		})
 	}
+
+	// Now we only have ingress host endpoint processing to do.  The ingress host endpoint may
+	// have already accepted this packet in the raw or mangle table.  In that case, accept the
+	// packet immediately here too.
+	inputRules = append(inputRules, r.acceptAlreadyAccepted()...)
 
 	// Apply host endpoint policy.
 	inputRules = append(inputRules,
@@ -567,7 +569,7 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 		rules = append(rules,
 			Rule{
 				Match: Match().ProtocolNum(ProtoIPIP).
-					DestIPSet(r.IPSetConfigV4.NameForMainIPSet(IPSetIDAllHostIPs)).
+					DestIPSet(r.IPSetConfigV4.NameForMainIPSet(IPSetIDAllHostNets)).
 					SrcAddrType(AddrTypeLocal, false),
 				Action:  r.filterAllowAction,
 				Comment: "Allow IPIP packets to other Calico hosts",
@@ -723,15 +725,6 @@ func (r *DefaultRuleRenderer) StaticManglePreroutingChain(ipVersion uint8) *Chai
 			Action: r.mangleAllowAction,
 		},
 	)
-
-	// If packet is from a workload interface, ACCEPT or RETURN immediately according to
-	// IptablesMangleAllowAction (because pre-DNAT policy is only for host endpoints).
-	for _, ifacePrefix := range r.WorkloadIfacePrefixes {
-		rules = append(rules, Rule{
-			Match:  Match().InInterface(ifacePrefix + "+"),
-			Action: r.mangleAllowAction,
-		})
-	}
 
 	// Now (=> not from a workload) dispatch to host endpoint chain for the incoming interface.
 	rules = append(rules,

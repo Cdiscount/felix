@@ -130,6 +130,9 @@ func StartDataplaneDriver(configParams *config.Config,
 				FailsafeOutboundHostPorts: configParams.FailsafeOutboundHostPorts,
 
 				DisableConntrackInvalid: configParams.DisableConntrackInvalidCheck,
+
+				NATPortRange:                       configParams.NATPortRange,
+				IptablesNATOutgoingInterfaceFilter: configParams.IptablesNATOutgoingInterfaceFilter,
 			},
 			IPIPMTU:                        configParams.IpInIpMtu,
 			IptablesRefreshInterval:        configParams.IptablesRefreshInterval,
@@ -161,6 +164,7 @@ func StartDataplaneDriver(configParams *config.Config,
 			},
 			HealthAggregator:                healthAggregator,
 			DebugSimulateDataplaneHangAfter: configParams.DebugSimulateDataplaneHangAfter,
+			ExternalNodesCidrs:              configParams.ExternalNodesCIDRList,
 		}
 		intDP := intdataplane.NewIntDataplaneDriver(dpConfig)
 		intDP.Start()

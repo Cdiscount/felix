@@ -8,7 +8,6 @@
 # Global glob patterns.
 *.log
 *.coverprofile
-*.pb.go
 /.noseids
 /nosetests.xml
 /release-notes-*
@@ -43,10 +42,14 @@ htmlcov/
 /python/
 /version.txt
 /.dir-locals.el
-junit.xml
+/report/*.xml
 # Old go sub-dir, used to be where we kept go source.
 /go/
 
 /k8sfv/prometheus/data
 /k8sfv/prometheus/prometheus.yml
 /k8sfv/output/
+
+.semaphore-cache/
+/rpm/felix.spec
+/debian/changelog

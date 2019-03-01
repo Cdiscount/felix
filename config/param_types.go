@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,11 +26,14 @@ import (
 	"strconv"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/util/validation"
+
 	"time"
 
 	"github.com/kardianos/osext"
 	log "github.com/sirupsen/logrus"
 
+	cnet "github.com/projectcalico/libcalico-go/lib/net"
 	"github.com/projectcalico/libcalico-go/lib/numorstring"
 )
 
@@ -281,6 +284,21 @@ func (p *PortListParam) Parse(raw string) (interface{}, error) {
 	return result, nil
 }
 
+type PortRangeParam struct {
+	Metadata
+}
+
+func (p *PortRangeParam) Parse(raw string) (interface{}, error) {
+	portRange, err := numorstring.PortFromString(raw)
+	if err != nil {
+		return nil, p.parseFailed(raw, fmt.Sprintf("%s is not a valid port range", raw))
+	}
+	if len(portRange.PortName) > 0 {
+		return nil, p.parseFailed(raw, fmt.Sprintf("%s has port name set", raw))
+	}
+	return portRange, nil
+}
+
 type PortRangeListParam struct {
 	Metadata
 }
@@ -380,4 +398,56 @@ func (p *OneofListParam) Parse(raw string) (result interface{}, err error) {
 		err = p.parseFailed(raw, "unknown option")
 	}
 	return
+}
+
+type CIDRListParam struct {
+	Metadata
+}
+
+func (c *CIDRListParam) Parse(raw string) (result interface{}, err error) {
+	log.WithField("CIDRs raw", raw).Info("CIDRList")
+	values := strings.Split(raw, ",")
+	resultSlice := []string{}
+	for _, in := range values {
+		val := strings.Trim(in, " ")
+		if len(val) == 0 {
+			continue
+		}
+		ip, net, e := cnet.ParseCIDROrIP(val)
+		if e != nil {
+			err = c.parseFailed(in, "invalid CIDR or IP "+val)
+			return
+		}
+		if ip.Version() != 4 {
+			err = c.parseFailed(in, "invalid CIDR or IP (not v4)")
+			return
+		}
+		resultSlice = append(resultSlice, net.String())
+	}
+	return resultSlice, nil
+}
+
+type RegionParam struct {
+	Metadata
+}
+
+const regionNamespacePrefix = "openstack-region-"
+const maxRegionLength int = validation.DNS1123LabelMaxLength - len(regionNamespacePrefix)
+
+func (r *RegionParam) Parse(raw string) (result interface{}, err error) {
+	log.WithField("raw", raw).Info("Region")
+	if len(raw) > maxRegionLength {
+		err = fmt.Errorf("The value of OpenstackRegion must be %v chars or fewer", maxRegionLength)
+		return
+	}
+	errs := validation.IsDNS1123Label(raw)
+	if len(errs) != 0 {
+		msg := "The value of OpenstackRegion must be a valid DNS label"
+		for _, err := range errs {
+			msg = msg + "; " + err
+		}
+		err = errors.New(msg)
+		return
+	}
+	return raw, nil
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
 
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -33,10 +33,11 @@ import (
 )
 
 var (
-	IfaceListRegexp = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}(,[a-zA-Z0-9_-]{1,15})*$`)
-	AuthorityRegexp = regexp.MustCompile(`^[^:/]+:\d+$`)
-	HostnameRegexp  = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
-	StringRegexp    = regexp.MustCompile(`^.*$`)
+	IfaceListRegexp  = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,15}(,[a-zA-Z0-9_-]{1,15})*$`)
+	AuthorityRegexp  = regexp.MustCompile(`^[^:/]+:\d+$`)
+	HostnameRegexp   = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+	StringRegexp     = regexp.MustCompile(`^.*$`)
+	IfaceParamRegexp = regexp.MustCompile(`^[a-zA-Z0-9:._+-]{1,15}$`)
 )
 
 const (
@@ -139,6 +140,8 @@ type Config struct {
 	MetadataAddr string `config:"hostname;127.0.0.1;die-on-fail"`
 	MetadataPort int    `config:"int(0,65535);8775;die-on-fail"`
 
+	OpenstackRegion string `config:"region;;die-on-fail"`
+
 	InterfacePrefix  string `config:"iface-list;cali;non-zero,die-on-fail"`
 	InterfaceExclude string `config:"iface-list;kube-ipvs0"`
 
@@ -180,6 +183,7 @@ type Config struct {
 	FailsafeOutboundHostPorts []ProtoPort `config:"port-list;udp:53,udp:67,tcp:179,tcp:2379,tcp:2380,tcp:6666,tcp:6667;die-on-fail"`
 
 	KubeNodePortRanges []numorstring.Port `config:"portrange-list;30000:32767"`
+	NATPortRange       numorstring.Port   `config:"portrange;"`
 
 	UsageReportingEnabled          bool          `config:"bool;true"`
 	UsageReportingInitialDelaySecs time.Duration `config:"seconds;300"`
@@ -187,6 +191,8 @@ type Config struct {
 	ClusterGUID                    string        `config:"string;baddecaf"`
 	ClusterType                    string        `config:"string;"`
 	CalicoVersion                  string        `config:"string;"`
+
+	ExternalNodesCIDRList []string `config:"cidr-list;;die-on-fail"`
 
 	DebugMemoryProfilePath          string        `config:"file;;"`
 	DebugCPUProfilePath             string        `config:"file;/tmp/felix-cpu-<timestamp>.pprof;"`
@@ -200,6 +206,8 @@ type Config struct {
 	sourceToRawConfig map[Source]map[string]string
 	rawValues         map[string]string
 	Err               error
+
+	IptablesNATOutgoingInterfaceFilter string `config:"iface-param;"`
 }
 
 type ProtoPort struct {
@@ -502,6 +510,9 @@ func loadParams() {
 		case "iface-list":
 			param = &RegexpParam{Regexp: IfaceListRegexp,
 				Msg: "invalid Linux interface name"}
+		case "iface-param":
+			param = &RegexpParam{Regexp: IfaceParamRegexp,
+				Msg: "invalid Linux interface parameter"}
 		case "file":
 			param = &FileParam{
 				MustExist:  strings.Contains(kindParams, "must-exist"),
@@ -516,11 +527,15 @@ func loadParams() {
 			param = &EndpointListParam{}
 		case "port-list":
 			param = &PortListParam{}
+		case "portrange":
+			param = &PortRangeParam{}
 		case "portrange-list":
 			param = &PortRangeListParam{}
 		case "hostname":
 			param = &RegexpParam{Regexp: HostnameRegexp,
 				Msg: "invalid hostname"}
+		case "region":
+			param = &RegionParam{}
 		case "oneof":
 			options := strings.Split(kindParams, ",")
 			lowerCaseToCanon := make(map[string]string)
@@ -532,6 +547,8 @@ func loadParams() {
 		case "string":
 			param = &RegexpParam{Regexp: StringRegexp,
 				Msg: "invalid string"}
+		case "cidr-list":
+			param = &CIDRListParam{}
 		default:
 			log.Panicf("Unknown type of parameter: %v", kind)
 		}

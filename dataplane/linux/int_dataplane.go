@@ -121,6 +121,8 @@ type Config struct {
 	HealthAggregator   *health.HealthAggregator
 
 	DebugSimulateDataplaneHangAfter time.Duration
+
+	ExternalNodesCidrs []string
 }
 
 // InternalDataplane implements an in-process Felix dataplane driver based on iptables
@@ -238,22 +240,31 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		InsertMode:            config.IptablesInsertMode,
 		RefreshInterval:       config.IptablesRefreshInterval,
 		PostWriteInterval:     config.IptablesPostWriteCheckInterval,
+		LockTimeout:           config.IptablesLockTimeout,
+		LockProbeInterval:     config.IptablesLockProbeInterval,
 	}
 
 	// However, the NAT tables need an extra cleanup regex.
 	iptablesNATOptions := iptablesOptions
 	iptablesNATOptions.ExtraCleanupRegexPattern = rules.HistoricInsertedNATRuleRegex
 
+	featureDetector := iptables.NewFeatureDetector()
+	iptablesFeatures := featureDetector.GetFeatures()
+
 	var iptablesLock sync.Locker
-	if config.IptablesLockTimeout <= 0 {
-		log.Info("iptables lock disabled.")
+	if iptablesFeatures.RestoreSupportsLock {
+		log.Debug("Calico implementation of iptables lock disabled (because detected version of " +
+			"iptables-restore will use its own implementation).")
+		iptablesLock = dummyLock{}
+	} else if config.IptablesLockTimeout <= 0 {
+		log.Debug("Calico implementation of iptables lock disabled (by configuration).")
 		iptablesLock = dummyLock{}
 	} else {
 		// Create the shared iptables lock.  This allows us to block other processes from
 		// manipulating iptables while we make our updates.  We use a shared lock because we
 		// actually do multiple updates in parallel (but to different tables), which is safe.
-		log.WithField("timeout", config.IptablesLockTimeout).Info(
-			"iptables lock enabled")
+		log.WithField("timeout", config.IptablesLockTimeout).Debug(
+			"Calico implementation of iptables lock enabled")
 		iptablesLock = iptables.NewSharedLock(
 			config.IptablesLockFilePath,
 			config.IptablesLockTimeout,
@@ -266,12 +277,14 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		4,
 		rules.RuleHashPrefix,
 		iptablesLock,
+		featureDetector,
 		iptablesOptions)
 	natTableV4 := iptables.NewTable(
 		"nat",
 		4,
 		rules.RuleHashPrefix,
 		iptablesLock,
+		featureDetector,
 		iptablesNATOptions,
 	)
 	rawTableV4 := iptables.NewTable(
@@ -279,12 +292,14 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 		4,
 		rules.RuleHashPrefix,
 		iptablesLock,
+		featureDetector,
 		iptablesOptions)
 	filterTableV4 := iptables.NewTable(
 		"filter",
 		4,
 		rules.RuleHashPrefix,
 		iptablesLock,
+		featureDetector,
 		iptablesOptions)
 	ipSetsConfigV4 := config.RulesConfig.IPSetConfigV4
 	ipSetsV4 := ipsets.NewIPSets(ipSetsConfigV4)
@@ -321,7 +336,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 	dp.RegisterManager(newMasqManager(ipSetsV4, natTableV4, ruleRenderer, config.MaxIPSetSize, 4))
 	if config.RulesConfig.IPIPEnabled {
 		// Add a manger to keep the all-hosts IP set up to date.
-		dp.ipipManager = newIPIPManager(ipSetsV4, config.MaxIPSetSize)
+		dp.ipipManager = newIPIPManager(ipSetsV4, config.MaxIPSetSize, config.ExternalNodesCidrs)
 		dp.RegisterManager(dp.ipipManager) // IPv4-only
 	}
 	if config.IPv6Enabled {
@@ -330,6 +345,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 			6,
 			rules.RuleHashPrefix,
 			iptablesLock,
+			featureDetector,
 			iptablesOptions,
 		)
 		natTableV6 := iptables.NewTable(
@@ -337,6 +353,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 			6,
 			rules.RuleHashPrefix,
 			iptablesLock,
+			featureDetector,
 			iptablesNATOptions,
 		)
 		rawTableV6 := iptables.NewTable(
@@ -344,6 +361,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 			6,
 			rules.RuleHashPrefix,
 			iptablesLock,
+			featureDetector,
 			iptablesOptions,
 		)
 		filterTableV6 := iptables.NewTable(
@@ -351,6 +369,7 @@ func NewIntDataplaneDriver(config Config) *InternalDataplane {
 			6,
 			rules.RuleHashPrefix,
 			iptablesLock,
+			featureDetector,
 			iptablesOptions,
 		)
 
@@ -712,7 +731,6 @@ func (d *InternalDataplane) loopUpdatingDataplane() {
 			// nil out the channel to record that the timer is now inactive.
 			d.reschedC = nil
 		case <-throttleC:
-			log.Debug("Throttle kick received")
 			d.applyThrottle.Refill()
 		case <-healthTicks:
 			d.reportHealth()

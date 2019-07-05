@@ -34,7 +34,7 @@ package bpf
 // const (
 // 	// tags of the XDP program, need to be changed if the XDP program changes
 // 	realTag = "d3b98a39bdd3181e" // as shown by running bpftool prog show
-// 	mockTag = "fcaaae5bb109d90c" // sha-1 of the ELF object truncated to 16 characters
+// 	mockTag = "6cd507a6b042b0da" // sha-1 of the ELF object truncated to 16 characters
 // )
 
 // var (

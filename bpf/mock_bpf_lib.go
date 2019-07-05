@@ -72,24 +72,6 @@ type XDPInfo struct {
 	Mode  XDPMode
 }
 
-type SockMapInfo struct {
-	CommonMapInfo
-
-	SkMsg *SkMsgInfo
-}
-
-type SockMap struct {
-	Info SockMapInfo
-	M    map[IPv4Mask]uint32
-}
-
-type SockopsInfo struct {
-	CgroupPath string
-}
-
-type SkMsgInfo struct {
-}
-
 type MockBPFLib struct {
 	XDPProgs            map[string]XDPInfo      // iface -> []maps
 	CIDRMaps            map[CIDRMapsKey]CIDRMap // iface -> map[ip]refCount

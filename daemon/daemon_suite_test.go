@@ -1,6 +1,4 @@
-//+build windows
-
-// Copyright (c) 2017-2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2019 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,30 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package windataplane_test
+package daemon_test
 
 import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"github.com/projectcalico/felix/config"
-	"github.com/projectcalico/felix/dataplane/windows"
+	"testing"
+
+	"github.com/onsi/ginkgo/reporters"
+
+	"github.com/projectcalico/libcalico-go/lib/testutils"
 )
 
-var _ = Describe("Constructor test", func() {
-	var configParams *config.Config
-	var dpConfig windataplane.Config
+func init() {
+	testutils.HookLogrusForGinkgo()
+}
 
-	JustBeforeEach(func() {
-		configParams = config.New()
-
-		dpConfig = windataplane.Config{
-			IPv6Enabled: configParams.Ipv6Support,
-		}
-	})
-
-	It("should be constructable", func() {
-		var dp = windataplane.NewWinDataplaneDriver(dpConfig)
-		Expect(dp).ToNot(BeNil())
-	})
-})
+func TestConfig(t *testing.T) {
+	RegisterFailHandler(Fail)
+	junitReporter := reporters.NewJUnitReporter("../report/daemon_suite.xml")
+	RunSpecsWithDefaultAndCustomReporters(t, "Daemon Suite", []Reporter{junitReporter})
+}

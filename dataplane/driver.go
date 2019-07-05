@@ -1,6 +1,6 @@
 // +build !windows
 
-// Copyright (c) 2017-2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2017-2019 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -26,8 +26,8 @@ import (
 	"runtime/debug"
 
 	"github.com/projectcalico/felix/config"
-	"github.com/projectcalico/felix/dataplane/external"
-	"github.com/projectcalico/felix/dataplane/linux"
+	extdataplane "github.com/projectcalico/felix/dataplane/external"
+	intdataplane "github.com/projectcalico/felix/dataplane/linux"
 	"github.com/projectcalico/felix/ifacemonitor"
 	"github.com/projectcalico/felix/ipsets"
 	"github.com/projectcalico/felix/logutils"
@@ -85,8 +85,9 @@ func StartDataplaneDriver(configParams *config.Config,
 		}).Info("Calculated iptables mark bits")
 
 		dpConfig := intdataplane.Config{
+			Hostname: configParams.FelixHostname,
 			IfaceMonitorConfig: ifacemonitor.Config{
-				InterfaceExcludes: configParams.InterfaceExcludes(),
+				InterfaceExcludes: configParams.InterfaceExclude,
 			},
 			RulesConfig: rules.Config{
 				WorkloadIfacePrefixes: configParams.InterfacePrefixes(),
@@ -118,8 +119,13 @@ func StartDataplaneDriver(configParams *config.Config,
 				IptablesMarkEndpoint:        markEndpointMark,
 				IptablesMarkNonCaliEndpoint: markEndpointNonCaliEndpoint,
 
-				IPIPEnabled:       configParams.IpInIpEnabled,
-				IPIPTunnelAddress: configParams.IpInIpTunnelAddr,
+				VXLANEnabled: configParams.VXLANEnabled,
+				VXLANPort:    configParams.VXLANPort,
+				VXLANVNI:     configParams.VXLANVNI,
+
+				IPIPEnabled:        configParams.IpInIpEnabled,
+				IPIPTunnelAddress:  configParams.IpInIpTunnelAddr,
+				VXLANTunnelAddress: configParams.IPv4VXLANTunnelAddr,
 
 				IptablesLogPrefix:         configParams.LogPrefix,
 				EndpointToHostAction:      configParams.DefaultEndpointToHostAction,
@@ -133,8 +139,10 @@ func StartDataplaneDriver(configParams *config.Config,
 
 				NATPortRange:                       configParams.NATPortRange,
 				IptablesNATOutgoingInterfaceFilter: configParams.IptablesNATOutgoingInterfaceFilter,
+				NATOutgoingAddress:                 configParams.NATOutgoingAddress,
 			},
 			IPIPMTU:                        configParams.IpInIpMtu,
+			VXLANMTU:                       configParams.VXLANMTU,
 			IptablesRefreshInterval:        configParams.IptablesRefreshInterval,
 			RouteRefreshInterval:           configParams.RouteRefreshInterval,
 			IPSetsRefreshInterval:          configParams.IpsetsRefreshInterval,
@@ -147,6 +155,7 @@ func StartDataplaneDriver(configParams *config.Config,
 			IgnoreLooseRPF:                 configParams.IgnoreLooseRPF,
 			IPv6Enabled:                    configParams.Ipv6Support,
 			StatusReportingInterval:        configParams.ReportingIntervalSecs,
+			XDPRefreshInterval:             configParams.XDPRefreshInterval,
 
 			NetlinkTimeout: configParams.NetlinkTimeoutSecs,
 
@@ -165,6 +174,9 @@ func StartDataplaneDriver(configParams *config.Config,
 			HealthAggregator:                healthAggregator,
 			DebugSimulateDataplaneHangAfter: configParams.DebugSimulateDataplaneHangAfter,
 			ExternalNodesCidrs:              configParams.ExternalNodesCIDRList,
+			SidecarAccelerationEnabled:      configParams.SidecarAccelerationEnabled,
+			XDPEnabled:                      configParams.XDPEnabled,
+			XDPAllowGeneric:                 configParams.GenericXDPEnabled,
 		}
 		intDP := intdataplane.NewIntDataplaneDriver(dpConfig)
 		intDP.Start()

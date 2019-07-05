@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -57,8 +57,9 @@ const (
 	IPSetIDNATOutgoingAllPools  = "all-ipam-pools"
 	IPSetIDNATOutgoingMasqPools = "masq-ipam-pools"
 
-	IPSetIDAllHostNets = "all-hosts-net"
-	IPSetIDThisHostIPs = "this-host"
+	IPSetIDAllHostNets        = "all-hosts-net"
+	IPSetIDAllVXLANSourceNets = "all-vxlan-net"
+	IPSetIDThisHostIPs        = "this-host"
 
 	ChainFIPDnat = ChainNamePrefix + "fip-dnat"
 	ChainFIPSnat = ChainNamePrefix + "fip-snat"
@@ -233,10 +234,16 @@ type Config struct {
 	OpenStackMetadataPort        uint16
 	OpenStackSpecialCasesEnabled bool
 
+	VXLANEnabled bool
+	VXLANPort    int
+	VXLANVNI     int
+
 	IPIPEnabled bool
 	// IPIPTunnelAddress is an address chosen from an IPAM pool, used as a source address
 	// by the host when sending traffic to a workload over IPIP.
 	IPIPTunnelAddress net.IP
+	// Same for VXLAN.
+	VXLANTunnelAddress net.IP
 
 	IptablesLogPrefix         string
 	EndpointToHostAction      string
@@ -250,6 +257,8 @@ type Config struct {
 
 	NATPortRange                       numorstring.Port
 	IptablesNATOutgoingInterfaceFilter string
+
+	NATOutgoingAddress net.IP
 }
 
 func (c *Config) validate() {
@@ -299,7 +308,7 @@ func NewRenderer(config Config) RuleRenderer {
 		inputAcceptActions = []iptables.Action{iptables.ReturnAction{}}
 	}
 
-	//What should we do with packets that are accepted in the forwarding chain
+	// What should we do with packets that are accepted in the forwarding chain
 	var filterAllowAction, mangleAllowAction iptables.Action
 	switch config.IptablesFilterAllowAction {
 	case "RETURN":

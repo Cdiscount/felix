@@ -26,12 +26,16 @@ import (
 	"strconv"
 	"strings"
 
+	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"time"
 
 	"github.com/kardianos/osext"
 	log "github.com/sirupsen/logrus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cnet "github.com/projectcalico/libcalico-go/lib/net"
 	"github.com/projectcalico/libcalico-go/lib/numorstring"
@@ -172,6 +176,47 @@ func (p *RegexpParam) Parse(raw string) (result interface{}, err error) {
 		result = raw
 	}
 	return
+}
+
+// RegexpPatternListParam differs from RegexpParam (above) in that it validates
+// string values that are (themselves) regular expressions.
+type RegexpPatternListParam struct {
+	Metadata
+	RegexpElemRegexp    *regexp.Regexp
+	NonRegexpElemRegexp *regexp.Regexp
+	Delimiter           string
+	Msg                 string
+}
+
+// Parse validates whether the given raw string contains a list of valid values.
+// Validation is dictated by two regexp patterns: one for valid regular expression
+// values, another for non-regular expressions.
+func (p *RegexpPatternListParam) Parse(raw string) (interface{}, error) {
+	var result []*regexp.Regexp
+	// Split into individual elements, then validate each one and compile to regexp
+	tokens := strings.Split(raw, p.Delimiter)
+	for _, t := range tokens {
+		if p.RegexpElemRegexp.Match([]byte(t)) {
+			// Need to remove the start and end symbols that wrap the actual regexp
+			// Note: There's a coupling here with the assumed pattern in RegexpElemRegexp
+			// i.e. that each value is wrapped by a single char symbol on either side
+			regexpValue := t[1 : len(t)-1]
+			compiledRegexp, compileErr := regexp.Compile(regexpValue)
+			if compileErr != nil {
+				return nil, p.parseFailed(raw, p.Msg)
+			}
+			result = append(result, compiledRegexp)
+		} else if p.NonRegexpElemRegexp.Match([]byte(t)) {
+			compiledRegexp, compileErr := regexp.Compile("^" + regexp.QuoteMeta(t) + "$")
+			if compileErr != nil {
+				return nil, p.parseFailed(raw, p.Msg)
+			}
+			result = append(result, compiledRegexp)
+		} else {
+			return nil, p.parseFailed(raw, p.Msg)
+		}
+	}
+	return result, nil
 }
 
 type FileParam struct {
@@ -425,6 +470,21 @@ func (c *CIDRListParam) Parse(raw string) (result interface{}, err error) {
 		resultSlice = append(resultSlice, net.String())
 	}
 	return resultSlice, nil
+}
+
+func GetKubernetesService(namespace, svcName string) (*v1.Service, error) {
+	k8sconf, err := rest.InClusterConfig()
+	if err != nil {
+		log.WithError(err).Error("Unable to create Kubernetes config.")
+		return nil, err
+	}
+	clientset, err := kubernetes.NewForConfig(k8sconf)
+	if err != nil {
+		log.WithError(err).Error("Unable to create Kubernetes client set.")
+		return nil, err
+	}
+	svcClient := clientset.CoreV1().Services(namespace)
+	return svcClient.Get(svcName, metav1.GetOptions{})
 }
 
 type RegionParam struct {

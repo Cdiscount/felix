@@ -22,7 +22,9 @@ import:
   version: b4deda0973fb4c70b50d226b1af49f3da59f5265
   subpackages:
   - proto
-- package: github.com/jbenet/go-reuseport
+# Need to pin to an older version as our code uses some deprecated functionality.
+- package: github.com/libp2p/go-reuseport
+  version: gx/v0.1.18
 # go-reuseport pulls in go-log without a pin and master is now incompatible with the
 # version of gogo/protobuf that we are using.  Pin to most recent working master revision.
 - package: github.com/ipfs/go-log
@@ -38,6 +40,10 @@ import:
   version: ^1.1.0
   subpackages:
   - types
+# gobuffalo/buffalo-plugins requires the DisableFlagParsing in the Command type,
+# so pin the version that has it.
+- package: github.com/spf13/cobra
+  version: ~0.0.3
 - package: github.com/projectcalico/libcalico-go
   subpackages:
   - lib/apiconfig
@@ -63,7 +69,7 @@ import:
   - lib/set
   - lib/validator/v1
 - package: github.com/projectcalico/typha
-  version: 1022a525f42cdf5cfba6346c864a36cb55d98660
+  version: 4c1f053f882d4c6a08a9528c8151ab9afeb68f8d
   subpackages:
   - pkg/syncclient
   - pkg/tlsutils
@@ -72,6 +78,7 @@ import:
   subpackages:
   - binder
 - package: github.com/prometheus/client_golang
+  version: 773f5027234d0b08adf766be34f55df2f312abf7
   subpackages:
   - prometheus
   - prometheus/promhttp
@@ -81,8 +88,12 @@ import:
   subpackages:
   - xfs
 - package: github.com/satori/go.uuid
+# Use our fork, because v1.0.5 causes test breakages due to problems with our log formatting code,
+# but gobuffalo/logger require newer version because of the SetOutput function. Our fork backports
+# the missing stuff on top of v1.0.4.
 - package: github.com/sirupsen/logrus
-  version: v1.0.4
+  repo: https://github.com/projectcalico/logrus
+  version: v1.0.4-calico
 - package: github.com/vishvananda/netlink
 # containernetworking/cni pulls in an old version, so pin to the version we need here.
   version: f07d9d5231b9cd05ddf2e5a8ef6582f385bc1770
@@ -124,3 +135,7 @@ import:
   - spew
 - package: github.com/hashicorp/go-version
   version: ^1.0.0
+- package: github.com/gobuffalo/packr
+  version: ~2.0.3
+  subpackages:
+  - v2/packr2

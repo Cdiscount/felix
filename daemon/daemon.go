@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -31,9 +32,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	log "github.com/sirupsen/logrus"
-	"k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
+	"k8s.io/api/core/v1"
 
 	"github.com/projectcalico/felix/buildinfo"
 	"github.com/projectcalico/felix/calc"
@@ -45,6 +44,7 @@ import (
 	"github.com/projectcalico/felix/proto"
 	"github.com/projectcalico/felix/statusrep"
 	"github.com/projectcalico/felix/usagerep"
+	"github.com/projectcalico/libcalico-go/lib/apiconfig"
 	apiv3 "github.com/projectcalico/libcalico-go/lib/apis/v3"
 	"github.com/projectcalico/libcalico-go/lib/backend"
 	bapi "github.com/projectcalico/libcalico-go/lib/backend/api"
@@ -52,7 +52,7 @@ import (
 	"github.com/projectcalico/libcalico-go/lib/backend/syncersv1/felixsyncer"
 	"github.com/projectcalico/libcalico-go/lib/backend/syncersv1/updateprocessors"
 	"github.com/projectcalico/libcalico-go/lib/backend/watchersyncer"
-	errors2 "github.com/projectcalico/libcalico-go/lib/errors"
+	cerrors "github.com/projectcalico/libcalico-go/lib/errors"
 	"github.com/projectcalico/libcalico-go/lib/health"
 	lclogutils "github.com/projectcalico/libcalico-go/lib/logutils"
 	"github.com/projectcalico/libcalico-go/lib/set"
@@ -155,6 +155,7 @@ func Run(configFile string) {
 	// loop until the datastore is ready.
 	log.Info("Loading configuration...")
 	var backendClient bapi.Client
+	var datastoreConfig apiconfig.CalicoAPIConfig
 	var configParams *config.Config
 	var typhaAddr string
 	var numClientsCreated int
@@ -205,7 +206,7 @@ configRetry:
 
 		// We should now have enough config to connect to the datastore
 		// so we can load the remainder of the config.
-		datastoreConfig := configParams.DatastoreConfig()
+		datastoreConfig = configParams.DatastoreConfig()
 		// Can't dump the whole config because it may have sensitive information...
 		log.WithField("datastore", datastoreConfig.Spec.DatastoreType).Info("Connecting to datastore")
 		backendClient, err = backend.NewClient(datastoreConfig)
@@ -255,7 +256,7 @@ configRetry:
 		numClientsCreated++
 
 		// If we're configured to discover Typha, do that now so we can retry if we fail.
-		typhaAddr, err = discoverTyphaAddr(configParams)
+		typhaAddr, err = discoverTyphaAddr(configParams, config.GetKubernetesService)
 		if err != nil {
 			log.WithError(err).Error("Typha discovery enabled but discovery failed.")
 			time.Sleep(1 * time.Second)
@@ -366,7 +367,7 @@ configRetry:
 		)
 	} else {
 		// Use the syncer locally.
-		syncer = felixsyncer.New(backendClient, syncerToValidator)
+		syncer = felixsyncer.New(backendClient, datastoreConfig.Spec, syncerToValidator)
 	}
 	log.WithField("syncer", syncer).Info("Created Syncer")
 
@@ -442,7 +443,24 @@ configRetry:
 		log.Infof("Starting the Typha connection")
 		err := typhaConnection.Start(context.Background())
 		if err != nil {
-			log.WithError(err).Fatal("Failed to connect to Typha")
+			log.WithError(err).Error("Failed to connect to Typha. Retrying...")
+			startTime := time.Now()
+			for err != nil && time.Since(startTime) < 30*time.Second {
+				// Set Ready to false and Live to true when unable to connect to typha
+				healthAggregator.Report(healthName, &health.HealthReport{Live: true, Ready: false})
+				err = typhaConnection.Start(context.Background())
+				if err == nil {
+					break
+				}
+				log.WithError(err).Debug("Retrying Typha connection")
+				time.Sleep(1 * time.Second)
+			}
+			if err != nil {
+				log.WithError(err).Fatal("Failed to connect to Typha")
+			} else {
+				log.Info("Connected to Typha after retries.")
+				healthAggregator.Report(healthName, &health.HealthReport{Live: true, Ready: true})
+			}
 		}
 		go func() {
 			typhaConnection.Finished.Wait()
@@ -729,7 +747,7 @@ func getAndMergeConfig(
 	}, "")
 	if err != nil {
 		switch err.(type) {
-		case errors2.ErrorResourceDoesNotExist:
+		case cerrors.ErrorResourceDoesNotExist:
 			logCxt.Info("No config of this type")
 			return nil
 		default:
@@ -862,7 +880,12 @@ func (fc *DataplaneConnector) handleProcessStatusUpdate(ctx context.Context, msg
 	_, err := fc.datastore.Apply(applyCtx, &kv)
 	cancel()
 	if err != nil {
-		log.Warningf("Failed to write status to datastore: %v", err)
+		if _, ok := err.(cerrors.ErrorOperationNotSupported); ok {
+			log.Debug("Datastore doesn't support status reports.")
+			return // and it won't support the last status key either.
+		} else {
+			log.Warningf("Failed to write status to datastore: %v", err)
+		}
 	} else {
 		fc.firstStatusReportSent = true
 	}
@@ -977,7 +1000,7 @@ func (fc *DataplaneConnector) Start() {
 
 var ErrServiceNotReady = errors.New("Kubernetes service missing IP or port.")
 
-func discoverTyphaAddr(configParams *config.Config) (string, error) {
+func discoverTyphaAddr(configParams *config.Config, getKubernetesService func(namespace, name string) (*v1.Service, error)) (string, error) {
 	if configParams.TyphaAddr != "" {
 		// Explicit address; trumps other sources of config.
 		return configParams.TyphaAddr, nil
@@ -990,18 +1013,7 @@ func discoverTyphaAddr(configParams *config.Config) (string, error) {
 
 	// If we get here, we need to look up the Typha service using the k8s API.
 	// TODO Typha: support Typha lookup without using rest.InClusterConfig().
-	k8sconf, err := rest.InClusterConfig()
-	if err != nil {
-		log.WithError(err).Error("Unable to create Kubernetes config.")
-		return "", err
-	}
-	clientset, err := kubernetes.NewForConfig(k8sconf)
-	if err != nil {
-		log.WithError(err).Error("Unable to create Kubernetes client set.")
-		return "", err
-	}
-	svcClient := clientset.CoreV1().Services(configParams.TyphaK8sNamespace)
-	svc, err := svcClient.Get(configParams.TyphaK8sServiceName, v1.GetOptions{})
+	svc, err := getKubernetesService(configParams.TyphaK8sNamespace, configParams.TyphaK8sServiceName)
 	if err != nil {
 		log.WithError(err).Error("Unable to get Typha service from Kubernetes.")
 		return "", err
@@ -1015,7 +1027,7 @@ func discoverTyphaAddr(configParams *config.Config) (string, error) {
 	for _, p := range svc.Spec.Ports {
 		if p.Name == "calico-typha" {
 			log.WithField("port", p).Info("Found Typha service port.")
-			typhaAddr := fmt.Sprintf("%s:%v", host, p.Port)
+			typhaAddr := net.JoinHostPort(host, fmt.Sprintf("%v", p.Port))
 			return typhaAddr, nil
 		}
 	}

@@ -1,4 +1,4 @@
-// Copyright (c) 2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2018-2019 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -36,6 +36,8 @@ type MockDataplane struct {
 	activeUntrackedPolicies        set.Set
 	activePreDNATPolicies          set.Set
 	activeProfiles                 set.Set
+	activeVTEPs                    map[string]proto.VXLANTunnelEndpointUpdate
+	activeRoutes                   set.Set
 	endpointToPolicyOrder          map[string][]TierInfo
 	endpointToUntrackedPolicyOrder map[string][]TierInfo
 	endpointToPreDNATPolicyOrder   map[string][]TierInfo
@@ -101,6 +103,23 @@ func (d *MockDataplane) ActiveProfiles() set.Set {
 	defer d.Unlock()
 
 	return d.activeProfiles.Copy()
+}
+func (d *MockDataplane) ActiveVTEPs() set.Set {
+	d.Lock()
+	defer d.Unlock()
+
+	cp := set.New()
+	for _, v := range d.activeVTEPs {
+		cp.Add(v)
+	}
+
+	return cp
+}
+func (d *MockDataplane) ActiveRoutes() set.Set {
+	d.Lock()
+	defer d.Unlock()
+
+	return d.activeRoutes.Copy()
 }
 func (d *MockDataplane) EndpointToProfiles() map[string][]string {
 	d.Lock()
@@ -198,6 +217,8 @@ func NewMockDataplane() *MockDataplane {
 		activeProfiles:                 set.New(),
 		activeUntrackedPolicies:        set.New(),
 		activePreDNATPolicies:          set.New(),
+		activeRoutes:                   set.New(),
+		activeVTEPs:                    make(map[string]proto.VXLANTunnelEndpointUpdate),
 		endpointToPolicyOrder:          make(map[string][]TierInfo),
 		endpointToUntrackedPolicyOrder: make(map[string][]TierInfo),
 		endpointToPreDNATPolicyOrder:   make(map[string][]TierInfo),
@@ -378,6 +399,28 @@ func (d *MockDataplane) OnEvent(event interface{}) {
 		id := *event.Id
 		Expect(d.namespaces).To(HaveKey(id))
 		delete(d.namespaces, id)
+	case *proto.RouteUpdate:
+		d.activeRoutes.Iter(func(item interface{}) error {
+			r := item.(proto.RouteUpdate)
+			if event.Dst == r.Dst && event.Type == r.Type {
+				return set.RemoveItem
+			}
+			return nil
+		})
+		d.activeRoutes.Add(*event)
+	case *proto.RouteRemove:
+		d.activeRoutes.Iter(func(item interface{}) error {
+			r := item.(proto.RouteUpdate)
+			if event.Dst == r.Dst && event.Type == r.Type {
+				return set.RemoveItem
+			}
+			return nil
+		})
+	case *proto.VXLANTunnelEndpointUpdate:
+		d.activeVTEPs[event.Node] = *event
+	case *proto.VXLANTunnelEndpointRemove:
+		Expect(d.activeVTEPs).To(HaveKey(event.Node), "delete for unknown VTEP")
+		delete(d.activeVTEPs, event.Node)
 	}
 }
 

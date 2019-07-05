@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -220,6 +220,30 @@ func (r *DefaultRuleRenderer) filterInputChain(ipVersion uint8) *Chain {
 				Match:   Match().ProtocolNum(ProtoIPIP),
 				Action:  DropAction{},
 				Comment: "Drop IPIP packets from non-Calico hosts",
+			},
+		)
+	}
+
+	if ipVersion == 4 && r.VXLANEnabled {
+		// VXLAN is enabled, filter incoming VXLAN packets that match our VXLAN port and VNI to ensure they
+		// come from a recognised host and are going to a local address on the host.
+		inputRules = append(inputRules,
+			Rule{
+				Match: Match().ProtocolNum(ProtoUDP).
+					DestPorts(uint16(r.Config.VXLANPort)).
+					SourceIPSet(r.IPSetConfigV4.NameForMainIPSet(IPSetIDAllVXLANSourceNets)).
+					DestAddrType(AddrTypeLocal).
+					VXLANVNI(uint32(r.Config.VXLANVNI)), /* relies on protocol and port check */
+				Action:  r.filterAllowAction,
+				Comment: "Allow VXLAN packets from whitelisted hosts",
+			},
+			Rule{
+				Match: Match().ProtocolNum(ProtoUDP).
+					DestPorts(uint16(r.Config.VXLANPort)).
+					DestAddrType(AddrTypeLocal).
+					VXLANVNI(uint32(r.Config.VXLANVNI)), /* relies on protocol and port check */
+				Action:  DropAction{},
+				Comment: "Drop VXLAN packets from non-whitelisted hosts",
 			},
 		)
 	}
@@ -577,6 +601,23 @@ func (r *DefaultRuleRenderer) filterOutputChain(ipVersion uint8) *Chain {
 		)
 	}
 
+	if ipVersion == 4 && r.VXLANEnabled {
+		// When VXLAN is enabled, auto-allow VXLAN traffic to other Calico nodes.  Without this,
+		// it's too easy to make a host policy that blocks VXLAN traffic, resulting in very confusing
+		// connectivity problems.
+		rules = append(rules,
+			Rule{
+				Match: Match().ProtocolNum(ProtoUDP).
+					DestPorts(uint16(r.Config.VXLANPort)).
+					SrcAddrType(AddrTypeLocal, false).
+					DestIPSet(r.IPSetConfigV4.NameForMainIPSet(IPSetIDAllVXLANSourceNets)).
+					VXLANVNI(uint32(r.Config.VXLANVNI)),
+				Action:  r.filterAllowAction,
+				Comment: "Allow VXLAN packets to other whitelisted hosts",
+			},
+		)
+	}
+
 	// Apply host endpoint policy.
 	rules = append(rules,
 		Rule{
@@ -640,8 +681,18 @@ func (r *DefaultRuleRenderer) StaticNATPostroutingChains(ipVersion uint8) []*Cha
 			Action: JumpAction{Target: ChainNATOutgoing},
 		},
 	}
+
+	var tunnelIfaces []string
+
 	if ipVersion == 4 && r.IPIPEnabled && len(r.IPIPTunnelAddress) > 0 {
-		// Add a rule to catch packets that are being sent down the IPIP tunnel from an
+		tunnelIfaces = append(tunnelIfaces, "tunl0")
+	}
+	if ipVersion == 4 && r.VXLANEnabled && len(r.VXLANTunnelAddress) > 0 {
+		tunnelIfaces = append(tunnelIfaces, "vxlan.calico")
+	}
+
+	for _, tunnel := range tunnelIfaces {
+		// Add a rule to catch packets that are being sent down a tunnel from an
 		// incorrect local IP address of the host and NAT them to use the tunnel IP as its
 		// source.  This happens if:
 		//
@@ -659,7 +710,7 @@ func (r *DefaultRuleRenderer) StaticNATPostroutingChains(ipVersion uint8) []*Cha
 		rules = append(rules, Rule{
 			Match: Match().
 				// Only match packets going out the tunnel.
-				OutInterface("tunl0").
+				OutInterface(tunnel).
 				// Match packets that don't have the correct source address.  This
 				// matches local addresses (i.e. ones assigned to this host)
 				// limiting the match to the output interface (which we matched

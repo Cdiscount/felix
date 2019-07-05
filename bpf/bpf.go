@@ -36,7 +36,6 @@ import (
 	"strings"
 	"syscall"
 
-	version "github.com/hashicorp/go-version"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
 
@@ -98,25 +97,12 @@ var (
 )
 
 // func init() {
-// 	boxXDP := packr.New("xdp", "./xdp/generated")
-// 	xdpBytes, err := boxXDP.Find("xdp.o")
+// 	box := packr.New("xdp", "./xdp/generated")
+// 	b, err := box.Find("xdp.o")
 // 	if err != nil {
 // 		panic(fmt.Sprintf("cannot find xdp.o: %v\n", err))
 // 	}
-
-// 	boxSockmap := packr.New("sockmap", "./sockmap/generated")
-// 	sockopsBytes, err := boxSockmap.Find("sockops.o")
-// 	if err != nil {
-// 		panic(fmt.Sprintf("cannot find sockops.o: %v\n", err))
-// 	}
-// 	skmsgBytes, err := boxSockmap.Find("redir.o")
-// 	if err != nil {
-// 		panic(fmt.Sprintf("cannot find redir.o: %v\n", err))
-// 	}
-
-// 	xdpAsset = xdpBytes
-// 	sockopsAsset = sockopsBytes
-// 	skmsgAsset = skmsgBytes
+// 	xdpAsset = b
 // }
 
 func (m XDPMode) String() string {

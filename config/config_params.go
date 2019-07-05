@@ -225,9 +225,8 @@ type Config struct {
 
 	IptablesNATOutgoingInterfaceFilter string `config:"iface-param;"`
 
-	SidecarAccelerationEnabled bool `config:"bool;false"`
-	XDPEnabled                 bool `config:"bool;false"`
-	GenericXDPEnabled          bool `config:"bool;false"`
+	XDPEnabled        bool `config:"bool;false"`
+	GenericXDPEnabled bool `config:"bool;false"`
 }
 
 type ProtoPort struct {

@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Tigera, Inc. All rights reserved.
+// Copyright (c) 2016-2019 Tigera, Inc. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -48,6 +48,12 @@ func (r Rule) RenderInsert(chainName, prefixFragment string, features *Features)
 	return r.renderInner(fragments, prefixFragment, features)
 }
 
+func (r Rule) RenderInsertAtRuleNumber(chainName string, ruleNum int, prefixFragment string, features *Features) string {
+	fragments := make([]string, 0, 7)
+	fragments = append(fragments, "-I", chainName, fmt.Sprintf("%d", ruleNum))
+	return r.renderInner(fragments, prefixFragment, features)
+}
+
 func (r Rule) RenderReplace(chainName string, ruleNum int, prefixFragment string, features *Features) string {
 	fragments := make([]string, 0, 7)
 	fragments = append(fragments, "-R", chainName, fmt.Sprintf("%d", ruleNum))
@@ -79,6 +85,9 @@ type Chain struct {
 }
 
 func (c *Chain) RuleHashes(features *Features) []string {
+	if c == nil {
+		return nil
+	}
 	hashes := make([]string, len(c.Rules))
 	// First hash the chain name so that identical rules in different chains will get different
 	// hashes.
